@@ -1,0 +1,336 @@
+mkdir baseline
+cd baseline
+
+#Copy fastq files into a folder called fastq inside baseline
+##This script contains multiple sub-scripts that must be copied to the baseline folder along the sequencing reads
+
+
+#####Perform QC on raw reads with FastQC (v0.11.5)#####
+
+cd fastq
+fastqc -f fastq -o fastqc/ -t 24 --noextract *.fastq.gz
+cd ..
+
+
+#####Trim low quality bases and remaining Illumina adapters with Trimmomatic (v0.39-1)#####
+
+##Example
+###java -jar trimmomatic.jar PE -threads <number_of_threads> -basein <path_to_forward_reads_file> -baseout trimmed/<sample_name>.fastq.gz SLIDINGWINDOW:4:20 LEADING:10 TRAILING:10 ILLUMINACLIP:NexteraPE-Pe.fa:2:30:10
+
+##trimmomatic.sh is an automated shell script to run trimmomatic sequentially for all samples with a single command
+###Check instructions inside the script before running
+./trimmomatic.sh
+
+
+#####Metagenome assembly with metaSPAdes (v3.14.1)#####
+
+##Example
+###metaspades.py -1 <path_to_paired_trimmed_forward_reads> -2 <path_to_paired_trimmed_reverse_trimmed_reads> -t <number_of_threads> -m 300 -o spades/spades_<sample_name>
+
+##metaspades.sh is an automated shell script to run metaSPAdes sequentially for all samples with a single command
+###Check instructions inside the script before running
+./metaspades.sh
+
+
+#####Align reads to contigs with BBMap (38.87)#####
+
+##Example
+###<path_to_bbmap_folder>/bbmap.sh in1=<path_to_paired_trimmed_forward_reads> in2=<path_to_paired_trimmed_reverse_trimmed_reads> ref=<path_to_spades_contigs_file> out=bbmap/<sample_name>.sam bamscript=bs.sh; sh bs.sh
+
+##bbmap_script.sh is an automated shell script to run BBMap sequentially to align each sample to their respective contigs file from metaSPAdes with a single command
+###Check instructions inside the script before running
+mkdir bbmap
+./bbmap_script.sh
+
+##Sometimes an error message will pop up saying that there are different numbers of reads in the paired input files and they may have been corrupted. This can be fixed running repair.sh from the BBTools suite:
+#<path_to_bbmap_folder>/repair.sh in1=<path_to_paired_trimmed_forward_reads> in2=<path_to_paired_trimmed_reverse_trimmed_reads> out1=<sample_name>_fixed_1.fq.gz out2=<sample_name>_fixed_2.fq.gz outs=singletons.fq.gz repair
+###BBMap should run normally after that
+
+
+#####Depth file with MetaBAT2 (v2.12.1)#####
+
+##Example
+###jgi_summarize_bam_contig_depths --outputDepth metabat/<sample_name>_depth.txt bbmap/<sample_name>_sorted.bam
+
+##depth.sh is an automated shell script to create a depth file for each sample from its sorted bam file
+mkdir metabat
+./depth.sh
+
+
+#####Annotation with MetaErg (v1.2.0)#####
+
+conda activate metaerg
+
+##Example
+###metaerg.pl --sp --tm --prefix <sample_name> --outdir metaerg/<sample_name> --locustag <sample_name> --cpus <number_of_threads> --depth metabat/<sample_name>_depth.txt spades/spades_<sample_name>/contigs.fasta
+
+##metaerg.sh is an automated shell script that annotates assembled contigs for each sample using depth information
+###Check instructions inside the script before running
+mkdir metaerg
+./metaerg.sh
+
+conda deactivate
+
+##Extracting 16S rRNA gene taxonomy from MetaErg annotation
+mkdir results
+
+##The ssu.sh script extracts all the 16S taxonomy hits from the MetaErg rRNA output
+###Can also be used for eukaryotic data, but the taxonomy is limited because of more clades used for 18S data
+###To extract 18S data, remove the "#" from line 9 of ssu.sh
+./ssu.sh
+
+##The 16S_taxonomy.sh script then converts the extracted entries into a more readable file
+./16S_taxonomy.sh
+
+##The output file with the taxonomic annotation (16S_taxonomy.txt) can be found in the results folder
+##You can use this file to perform the statistical analyses following the baseline.R R script
+
+##########Co-assembly##########
+##Since we observed no statistical differences between the internal and external DNA samples, we will now combine both types of metagenomes and co-assemble them together
+
+
+#####Co-assembly with metaSPAdes (v3.14.1)#####
+
+##The e/iDNA forward and reverse reads for each sample will be concatenated and then run them through metaSPAdes
+
+cd trimmed
+
+##concatenate.sh is an automated shell script that will unzip the fastq.gz files, concatenate them into per sample files
+###It will alsp output a sanity check file (concatenation_results.txt in the trimmed folder) counting the number of reads before and after the concatenation for each sample to make sure everything went okay
+####The script then compresses the concatenated fastq files to save space on disk
+./concatenate.sh
+
+##Now we can perform the assembly with metaSPAdes
+
+##metaspades_coassembly.sh is an automated shell script to run metaSPAdes for all samples in the trimmed/concatenated folder
+###Check instructions inside the script before running
+./metaspades_coassembly.sh
+
+
+#####Align reads to contigs with BBMap (38.87)#####
+
+##bbmap_coassembly.sh is an automated shell script that aligns the concatenated reads to their respective contigs in the spades folder and then calculates some basic stats on the amount of reads mapped and the coverage obtained
+###Check instructions inside the script before running
+./bbmap_coassembly.sh
+
+
+#####Depth file with MetaBAT2 (v2.12.1)#####
+
+##depth_coassembly.sh is an automated shell script that creates a depth file for each sample from its sorted bam file
+./depth_coassembly.sh
+
+
+#####Annotation with MetaErg (v1.2.0)#####
+
+conda activate metaerg
+
+##metaerg_coassembly.sh is an automated shell script that will run MetaErg on the co-assemblies
+###Check instructions inside the script before running
+./metaerg_coassembly.sh
+
+conda deactivate
+
+##Extracting taxonomy from MetaErg coassembly annotation
+
+##The ssu_coassembly.sh script extracts all the 16S taxonomy hits from the MetaErg coassembly rRNA output
+###Can also be used for eukaryotic data, but the taxonomy is limited because of more clades used for 18S data
+###To extract 18S data, remove the "#" from line 9 of ssu.sh
+./ssu_coassembly.sh
+
+##The 16S_coassembly_taxonomy.sh script then converts the extracted entries into a more readable file
+./16S_coassembly_taxonomy.sh
+
+##The output file with the 16S taxonomic annotation (16S_taxonomy.txt) can be found in the results folder
+
+##The metaerg_taxonomy.sh will extract the taxonomy based on the MetaErg coassembly CDS annotation
+./metaerg_taxonomy.sh
+
+##The output file with the CDS taxonomic annotation (metaerg_cds_taxonomy.tsv) can be found in the results folder
+
+##You can use these files to perform the statistical analyses and produce figures following the baseline.R R script
+
+
+#####Binning with MetaBAT2 (v2.12.1)#####
+
+#binning_coassembly.sh is an automated shell script that reconstructs individual genomes from their respective metagenome co-assemblies
+./binning_coassembly.sh
+
+
+#####Bin refinement with RefineM (v0.0.25)#####
+
+##RefineM is no longer supported so its databases could be quite outdated
+###The authors also suggest GUNC or MAGpurify for supported alternatives
+
+##Bins produced by MetaBAT2 need to be separated into individual folders for each sample for RefineM
+###This can be done running the separate_bins_coassembly.sh script
+####The script will produce a "cp: missing file operand" error if there are no bins for any given sample name that does have a depth file. If there were no bins produced for said sample, this can be ignored
+./separate_bins_coassembly.sh
+
+##RefineM needs Diamond so make sure that it is available in the path before running the next section of the script
+
+##refinem_coassembly.sh is an automated shell script that runs the RefineM pipeline for the bins of each sample
+###Check instructions inside the script before running
+./refinem_coassembly.sh
+
+##The ssu_erroneous command doesn't automatically remove contaminating 16S sequences
+###It outputs a table with the contaminating sequence hits that allows the user to determine whether it is appropriate to remove the sequences and/or genomes from the analysis or not
+####Each bin must be analyzed manually based on this and the bins that are decided to remain to be analyzed should be moved to a new folder (called refined) inside the refinem folder where they can be accessed for downstream analyses
+
+##Since there were no 16S hits that had to be removed, we can keep all the refined bins produced by RefineM as is and use them for downstream analysis
+###The refined.sh script will create the refined directory and copy all the refined MAGs
+####This script will produce the following error: "cp: cannot stat '<path_to_bins>*.fa': No such file or directory" if there are no bins on that folder. If there were no bins produced for said sample, this can be ignored
+./refined.sh
+
+
+#####Check bin stats with CheckM (v1.2.2)#####
+
+##The completeness and contamination stats are calculated with CheckM2, but CheckM provides information like genome size, N50, GC content, % mapped reads, etc. that CheckM2 does not provide so both were used
+
+checkm lineage_wf refinem/coassembly/refined/ checkm -x fa -t <number_of_threads> --pplacer_threads <number_of_threads> -f checkm/checkm.txt --tab_table
+
+##The checkm/storage/bin_stats.analyze.tsv file provides the general information
+
+##To estimate the % of mapped reads (i.e., the relative abundance in the metagenome) is calculated by first estimating the coverage profiles of all bins against all metagenomes using the coverage command
+checkm coverage refinem/coassembly/refined/ checkm/coverage.tsv -x fa -t <number_of_threads> bbmap_coassembly/AB_HT_sorted.bam bbmap_coassembly/AB_LT_sorted.bam bbmap_coassembly/Ale_1_sorted.bam bbmap_coassembly/Cam_Cam_sorted.bam bbmap_coassembly/Dump_2018_sorted.bam bbmap_coassembly/Dump_2019_sorted.bam bbmap_coassembly/Dyna_2018_sorted.bam bbmap_coassembly/Dyna_2019_sorted.bam bbmap_coassembly/Nani_A1_sorted.bam bbmap_coassembly/Nani_B1_sorted.bam bbmap_coassembly/Tank_2018_sorted.bam bbmap_coassembly/Tank_2019_sorted.bam bbmap_coassembly/Tupi_2018_sorted.bam bbmap_coassembly/Tupi_2019_sorted.bam
+
+##The percentages are then calculated with the profile command
+checkm profile checkm/coverage.tsv -f checkm/profile.tsv --tab_table
+
+
+#####Check bin quality with CheckM2 (v0.1.3)#####
+conda activate checkm2
+
+mkdir checkm2
+checkm2 predict --input refinem/coassembly/refined/ --output-directory checkm2 -x .fa -t <number_of_threads>
+
+conda deactivate
+
+
+#####Determining the phylogeny of bins with GTDB-Tk (v2.1.0)#####
+
+conda activate gtdbtk-2.1.0
+
+gtdbtk classify_wf --genome_dir refinem/coassembly/refined --out_dir gtdbtk_coassembly -x fa --prefix baseline --cpus <number_of_threads>
+
+conda deactivate
+
+
+#####Annotating individual bins with MetaErg#####
+
+conda activate metaerg
+
+##metaerg_bins.sh is an automated shell script that extracts the subset of the annotation for individual refined bins
+./metaerg_bins_coassembly.sh
+
+conda deactivate
+
+
+#####Detecting hydrocarbon degradation genes using CANT-HYD#####
+
+##cant_hyd_coassembly_noise.sh is an automated shell script that runs the CANT-HYD HMM models with a noise cutoff on the metagenome assemblies and refined MAGs
+###Check instructions inside the script before running
+####The script then puts them in a table by counts per gene along the CDS counts
+#####Needs to have the file called cant-hyd_genes.txt with all the names of the genes in the baseline folder (as named in their respective CANT-HYD HMM model)
+./cant_hyd_coassembly_noise.sh
+
+##This script outputs two files in the results folder: cant-hyd_noise_metagenome_results.txt (metagenome results) and cant-hyd_noise_bin_results.txt (bin results)
+###This will then be processed with the baseline.R R script
+
+
+#####Detection of functional pathways#####
+##genes_pathways.sh is an automated shell script that sorts the KEGG results of the metagenomes and bins using the KO terms selected in the genes_pathways.txt (must be in the baseline folder)
+###The script then puts them in a table (one for metagenomes and one for bins)
+./genes_pathways.sh
+
+
+#####MAG phylogenomic tree with anvi'o (v 7.1)#####
+
+conda activate anvio-7.1
+mkdir phylogenomics
+mkdir phylogenomics/original
+
+##To use Anvi'o for phylogenomics, MAGs must be imported into a contigs-database object created for each genome
+###The fasta files of the medium- and high-quality MAGs were first manually moved from the refinem/coassembly/refined/ folder to the phylogenomics/original folder
+
+##anvio_database_phylo.sh is an automated shell script that will make database artifacts for all .fa samples in the phylogenomics/original folder
+###It will then run HMMs for single-copy (SCGs) and find the taxonomy of the genomes based on the SCGs
+####Check instructions inside the script before running
+./anvio_database_phylo.sh
+
+##The GTDB-Tk taxonomy produced by anvi'o only goes up to genus so it is not very useful to separate MAGs
+###We can copy the GTDB-Tk results from the standalone version to complement the anvi'o results found in the phylogenomics/taxonomy folder
+
+cd phylogenomics
+
+##To avoid having to run the same command multiple times for each database file, an external genomes file can be created that tells anvi'o to run a given command on the list of genomes included in the external genomes file
+anvi-script-gen-genomes-file --input-dir contig-database/ --output-file external_genomes.txt
+
+##We can now find HMM hits for the Bacteria_71 collection that will be used to produce the phylogenomic tree
+anvi-get-sequences-for-hmm-hits -e external_genomes.txt --hmm-sources Bacteria_71 -o concatenated_proteins.fa --get-aa-sequences --concatenate-genes --return-best-hit
+
+anvi-gen-phylogenomic-tree -f concatenated_proteins.fa -o phylogenomic-tree.txt
+
+##The resulting tree was manually midpoint rooted using FigTree and exported back to Anvi'o as a Newick tree
+
+##We can then visualize and edit the phylogenomic tree
+anvi-interactive -p phylogenomic-profile.db -d view.txt -t phylogenomic-tree-midpoint.txt --title 'Phylogenomic tree' --manual
+
+
+#####Rhodococcus pangenome with anvi'o (v 7.1)#####
+
+##To use Anvi'o for pangenomics, genomes/MAGs must be imported into a contigs-database object created for each genome/MAGs
+
+mkdir Rhodococcus
+mkdir Rhodococcus/original
+
+##The fasta files of the MAGs from the analysis were first manually moved from the refinem/coassembly/refined/ folder to the Rhodococcus/original folder along with the genomes downloaded from NCBI
+
+##anvio_database.sh script is an automated shell script that will make both the fasta and database artifacts for all .fa samples in the Rhodococcus/original folder
+###It will then run HMMs for single-copy (SCGs) and CANT-HYD genes and find the taxonomy of the genomes based on the SCGs
+####Check instructions inside the script before running
+#####The CANTHYD folder from the GitHub repository needs to be copied inside the Rhodococcus folder
+######It contains the formatted CANT-HYD HMMs so they can be run by anvi'o
+./anvio_database.sh
+
+##The GTDB-Tk taxonomy produced by anvi'o only goes up to genus so it is not very useful to separate genomes/bins that we know all belong to Rhodococcus
+###Running the standalone version of GTBD-Tk produces higher resolution results
+
+conda deactivate
+conda activate gtdbtk-2.1.0
+gtdbtk classify_wf --genome_dir Rhodococcus/original/ --out_dir Rhodococcus/gtdbtk/ -x fa --prefix rhodococcus --cpus <number_of_threads>
+conda deactivate
+
+##The standalone GTDB-Tk results were used to create the layer-additional-data.txt file that will be used in the next steps to produce the pangenome figure
+
+conda activate anvio-7.1
+cd Rhodococcus
+
+##To avoid having to run the same command multiple times for each database file, an external genomes file can be created that tells anvi'o to run a given command on the list of genomes included in the external genomes file
+anvi-script-gen-genomes-file --input-dir contig-database/ --output-file external_genomes.txt
+
+##Genome completeness
+anvi-estimate-genome-completeness -e external_genomes.txt -o completeness.txt
+
+##HMM tables need to be formatted to the anvi'o format:
+###gene_callers_id	source	accession	function	e_value
+
+##HMM tables were first exported using the anvio_hmms_export.sh script:
+./anvio_hmms_export.sh
+
+##The resulting tables were then manually modified to fit the required format
+###After that, we can import the CANT-HYD results as functions
+./anvio_hmms.sh
+
+##We can then generate a genome storage to then create the pangenome
+anvi-gen-genomes-storage -e external_genomes.txt -o rhodococcus-GENOMES.db
+
+anvi-pan-genome -g rhodococcus-GENOMES.db -n Rhodococcus -o pangenome/ -T <number_of_threads>
+
+##Here we can also add the standalone GTDB-Tk taxonomy
+anvi-import-misc-data layer-additional-data.txt -p pangenome/Rhodococcus-PAN.db -t layers
+
+##We can calculate the genome similarity among the MAGs/genomes
+anvi-compute-genome-similarity -e external_genomes.txt -o ani -p pangenome/Rhodococcus-PAN.db --program pyANI -T 60
+
+##The pangenome can then be displayed and edited on the 
+anvi-display-pan -p pangenome/Rhodococcus-PAN.db -g rhodococcus-GENOMES.db
