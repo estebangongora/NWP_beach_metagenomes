@@ -1,9 +1,60 @@
 rm(list = ls())
 
 #Load required libraries
+library(sf)
+library(tmap)
+library(grid)
 library(tidyverse)
 library(phyloseq)
 library(vegan)
+
+######################## Map #######################################################################
+
+#Set the coordinates for the two panels in the figure
+nwp = st_bbox(c(xmin = -42.275, xmax = -168.069, ymin = 56.00, ymax = 82.897)) %>% 
+  st_as_sfc() %>% st_set_crs(4326)
+resolute = st_bbox(c(xmin = -95.850220, xmax = -93.982544, ymin = 74.587553, ymax = 74.840620)) %>% 
+  st_as_sfc() %>% st_set_crs(4326)
+cornwallis = st_bbox(c(xmin = -96.778564, xmax = -93.197021, ymin = 74.455247, ymax = 75.674916)) %>% 
+  st_as_sfc() %>% st_set_crs(4326)
+
+#Load data frame with coordinates of the sampling sites
+sites_data <- read.csv("sites.csv")
+sites <- st_as_sf(sites_data, coords = c('Longitude', 'Latitude'), crs=4326)
+
+#Load shapefile which was obtained from Statistics Canada
+##https://www12.statcan.gc.ca/census-recensement/2011/geo/bound-limit/files-fichiers/2016/lpr_000b16a_e.zip
+##To produce Resolute panel 
+canada = read_sf("map/lpr_000b21a_e/lpr_000b21a_e.shp")
+cornwallis_gps = st_transform(cornwallis, 3347)
+canada_cornwallis <- st_intersection(canada, cornwallis_gps)
+map_resolute <- tm_shape(canada_cornwallis, bbox = resolute) +
+  tm_polygons(col = "#b9dfc4", border.alpha = 0.5) +
+  tm_layout(bg.color = "#b1c4f8") +
+  tm_shape(sites) +
+  tm_layout(legend.show = FALSE) +
+  tm_dots(size = 0.25, shape = 19, col = "Site", palette = "Dark2")
+map_resolute
+
+#Load shapefile which was obtained from Natural Earth
+##https://www.naturalearthdata.com/downloads/50m-physical-vectors/50m-land/
+##For main map
+land = read_sf("ne_50m_land/ne_50m_land.shp")
+map_nwp <- tm_shape(land, bbox = nwp) +
+  tm_polygons(col = "#b9dfc4", border.alpha = 0.5) +
+  tm_layout(bg.color = "#b1c4f8") +
+  tm_shape(sites) +
+  tm_dots(size = 0.3, col = "Site", palette = "Dark2") +
+  tm_layout(legend.position = c("left", "bottom"), legend.bg.color = "white", legend.frame = "black") +
+  tm_shape(resolute) + tm_borders(lwd = 1, col = "black") +
+  tm_scale_bar(position = c("RIGHT","BOTTOM"))
+
+#Make map
+map_nwp
+print(map_resolute, vp = viewport(0.18, 0.82, width = 0.3, height = 0.3))
+
+#The objects are quite heavy so it is better to remove them after producing the figure
+rm(canada, land)
 
 ######################## 16S analysis for eDNA vs iDNA #############################################
 
